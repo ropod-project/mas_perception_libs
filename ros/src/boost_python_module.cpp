@@ -361,12 +361,12 @@ planeMsgToMarkerWrapper(const std::string &pSerialPlane, const std::string &pNam
     return to_python(*markerPtr);
 }
 
-float
-getDominantOrientationWrapper(const std::string &pSerialCloud,
-                              double referenceNormalX,
-                              double referenceNormalY,
-                              double referenceNormalZ,
-                              double angleFilterTolerance)
+std::string
+filterBasedOnNormalsWrapper(const std::string &pSerialCloud,
+                            double referenceNormalX,
+                            double referenceNormalY,
+                            double referenceNormalZ,
+                            double angleFilterTolerance)
 {
     auto cloudMsg = from_python<sensor_msgs::PointCloud2>(pSerialCloud);
     sensor_msgs::PointCloud2::Ptr cloudMsgPtr = boost::make_shared<sensor_msgs::PointCloud2>(cloudMsg);
@@ -375,10 +375,30 @@ getDominantOrientationWrapper(const std::string &pSerialCloud,
                                             referenceNormalY,
                                             referenceNormalZ };
 
-    float orientation = getDominantOrientation(cloudMsgPtr,
-                                               referenceNormal,
-                                               angleFilterTolerance);
-    return orientation;
+    // comment out for returning a filtered cloud
+    auto filteredCloudPtr = filterBasedOnNormals(cloudMsgPtr,
+                                                 referenceNormal,
+                                                 angleFilterTolerance);
+    std::string serializedMsg = to_python(*filteredCloudPtr);
+    return serializedMsg;
+}
+
+float
+getDominantOrientationWrapper(const std::string &pSerialCloud,
+                              double referenceNormalX,
+                              double referenceNormalY,
+                              double referenceNormalZ)
+{
+    auto cloudMsg = from_python<sensor_msgs::PointCloud2>(pSerialCloud);
+    sensor_msgs::PointCloud2::Ptr cloudMsgPtr = boost::make_shared<sensor_msgs::PointCloud2>(cloudMsg);
+
+    std::vector<double> referenceNormal = { referenceNormalX,
+                                            referenceNormalY,
+                                            referenceNormalZ };
+
+    float dominantOrientation = getDominantOrientation(cloudMsgPtr,
+                                                       referenceNormal);
+    return dominantOrientation;
 }
 
 }  // namespace mas_perception_libs
@@ -428,6 +448,8 @@ BOOST_PYTHON_MODULE(_cpp_wrapper)
     bp::def("_transform_point_cloud", mas_perception_libs::transformPointCloudWrapper);
 
     bp::def("_plane_msg_to_marker", mas_perception_libs::planeMsgToMarkerWrapper);
+
+    bp::def("_filter_based_on_normals", mas_perception_libs::filterBasedOnNormalsWrapper);
 
     bp::def("_get_dominant_orientation", mas_perception_libs::getDominantOrientationWrapper);
 }

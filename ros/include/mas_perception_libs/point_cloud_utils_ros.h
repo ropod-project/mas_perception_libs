@@ -64,11 +64,13 @@ planeMsgToMarkers(const mas_perception_msgs::Plane &pPlaneMsg, const std::string
 mas_perception_msgs::Plane::Ptr
 planeModelToMsg(const PlaneModel &pModel);
 
-// sensor_msgs::PointCloud2::ConstPtr
-float
-getDominantOrientation(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
-                       const std::vector<double> &referenceNormal,
-                       double angleFilterTolerance);
+sensor_msgs::PointCloud2::ConstPtr
+filterBasedOnNormals(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
+                     const std::vector<double> &referenceNormal,
+                     double angleFilterTolerance);
+
+float getDominantOrientation(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
+                             const std::vector<double> &referenceNormal);
 
 
 /*!

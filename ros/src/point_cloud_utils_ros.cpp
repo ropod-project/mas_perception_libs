@@ -206,11 +206,11 @@ PlaneSegmenterROS::findPlanes(const sensor_msgs::PointCloud2::ConstPtr &pCloudPt
     return planeListPtr;
 }
 
-// sensor_msgs::PointCloud2::ConstPtr
-float
-getDominantOrientation(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
-                       const std::vector<double> &referenceNormal,
-                       double angleFilterTolerance)
+sensor_msgs::PointCloud2::ConstPtr
+// float
+filterBasedOnNormals(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
+                     const std::vector<double> &referenceNormal,
+                     double angleFilterTolerance)
 {
     auto pclCloudPtr = boost::make_shared<PointCloud>();
     pcl::fromROSMsg(*pCloudPtr, *pclCloudPtr);
@@ -260,54 +260,54 @@ getDominantOrientation(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
     sor.setMinNeighborsInRadius (100);
     sor.filter(*cloudWithoutOutliers);
 
-    // kept for debugging purposes
-    // sensor_msgs::PointCloud2::Ptr filteredCloudMsgPtr (new sensor_msgs::PointCloud2);
-    // filteredCloudMsgPtr->header = pCloudPtr->header;
-    // filteredCloudMsgPtr->fields = pCloudPtr->fields;
-    // filteredCloudMsgPtr->is_bigendian = pCloudPtr->is_bigendian;
-    // filteredCloudMsgPtr->is_dense = pCloudPtr->is_dense;
-    // filteredCloudMsgPtr->height = 1;
-    // filteredCloudMsgPtr->width = cloudWithoutOutliers->points.size();
-    // pcl::toROSMsg(*cloudWithoutOutliers, *filteredCloudMsgPtr);
-    // return filteredCloudMsgPtr;
+    sensor_msgs::PointCloud2::Ptr filteredCloudMsgPtr (new sensor_msgs::PointCloud2);
+    filteredCloudMsgPtr->header = pCloudPtr->header;
+    filteredCloudMsgPtr->fields = pCloudPtr->fields;
+    filteredCloudMsgPtr->is_bigendian = pCloudPtr->is_bigendian;
+    filteredCloudMsgPtr->is_dense = pCloudPtr->is_dense;
+    filteredCloudMsgPtr->height = 1;
+    filteredCloudMsgPtr->width = cloudWithoutOutliers->points.size();
+    pcl::toROSMsg(*cloudWithoutOutliers, *filteredCloudMsgPtr);
+    return filteredCloudMsgPtr;
+}
 
-    // extract only those points for which the normal is not aligned with the reference normal
-    Eigen::Vector4f xAxisEigen(1, 0, 0, 0);
+float getDominantOrientation(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
+                             const std::vector<double> &referenceNormal)
+{
+    auto pclCloudPtr = boost::make_shared<PointCloud>();
+    pcl::fromROSMsg(*pCloudPtr, *pclCloudPtr);
+
+    std::cout << "Estimating normals for calculating orientation" << std::endl;
+    pcl::NormalEstimation<PointT, pcl::Normal> ne;
+    pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
+    pcl::search::KdTree<PointT>::Ptr tree (new pcl::search::KdTree<PointT>());
+    ne.setSearchMethod (tree);
+    ne.setRadiusSearch(0.03f);
+    ne.setInputCloud(pclCloudPtr);
+    ne.compute(*normals);
+
+    Eigen::Vector4f referenceNormalEigen(referenceNormal[0], referenceNormal[1], referenceNormal[2], 0);
+    double referenceNormalNorm = referenceNormalEigen.norm();
     std::vector<std::vector<float>> angles;
+
+    // extract only those points for which the normal is aligned with the reference normal
     for (unsigned int i=0; i < normals->points.size(); i++)
     {
         Eigen::Vector4f normalEigen(normals->points[i].normal_x,
                                     normals->points[i].normal_y,
                                     normals->points[i].normal_z, 0);
-        double angle = std::abs(pcl::getAngle3D(xAxisEigen, normalEigen));
+        double angle = std::abs(pcl::getAngle3D(referenceNormalEigen, normalEigen));
         angle = std::min(angle, M_PI - angle);
-
-        double angleWithReference = std::abs(pcl::getAngle3D(referenceNormalEigen, normalEigen));
-        angleWithReference = std::min(angleWithReference, M_PI - angleWithReference);
-
-        if (!std::isnan(angle) && std::abs(angleWithReference) > angleFilterTolerance)
-        {
-            std::vector<float> angle_vec;
-            angle_vec.push_back(static_cast<float>(angle));
-            angles.push_back(angle_vec);
-        }
+        std::vector<float> angle_vec;
+        angle_vec.push_back(static_cast<float>(angle));
+        angles.push_back(angle_vec);
     }
 
-    std::cout << "Clustering orientations with respect to x-axis" << std::endl;
     pcl::Kmeans clustering(angles.size(), 1);
     clustering.setInputData(angles);
     clustering.setClusterSize(2);
     clustering.kMeans();
-
     auto centroids = clustering.get_centroids();
-    std::cout << "Orientation centroids:" << std::endl;
-    for (auto centroid : centroids)
-    {
-        for (auto c : centroid)
-        {
-            std::cout << c << " " << std::endl;
-        }
-    }
 
     unsigned int cluster_point_counts[2];
     for (auto cluster : clustering.points_to_clusters_)

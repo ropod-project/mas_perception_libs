@@ -11,7 +11,7 @@ from geometry_msgs.msg import Vector3, Quaternion
 from sensor_msgs.msg import PointCloud2, Image as ImageMsg
 from mas_perception_msgs.msg import PlaneList, Object
 from mas_perception_libs._cpp_wrapper import PlaneSegmenterWrapper, _cloud_msg_to_cv_image, _cloud_msg_to_image_msg,\
-    _crop_organized_cloud_msg, _crop_cloud_to_xyz, _transform_point_cloud, _get_dominant_orientation
+    _crop_organized_cloud_msg, _crop_cloud_to_xyz, _transform_point_cloud, _filter_based_on_normals, _get_dominant_orientation
 from .bounding_box import BoundingBox2D
 from .ros_message_serialization import to_cpp, from_cpp
 
@@ -196,13 +196,21 @@ def crop_cloud_to_xyz(cloud_msg, bounding_box):
     return _crop_cloud_to_xyz(serial_cloud, bounding_box)
 
 
-def get_dominant_orientation(cloud_msg, reference_normal, angle_filter_tolerance):
+def filter_based_on_normals(cloud_msg, reference_normal, angle_filter_tolerance):
     if not isinstance(reference_normal, list):
         raise ValueError('reference_normal should be a list')
 
     serial_cloud = to_cpp(cloud_msg)
-    dominant_orientation = _get_dominant_orientation(serial_cloud, reference_normal[0], reference_normal[1],
-                                                     reference_normal[2], angle_filter_tolerance)
+    filtered_cloud_str = _filter_based_on_normals(serial_cloud, reference_normal[0], reference_normal[1],
+                                                  reference_normal[2], angle_filter_tolerance)
+    return from_cpp(filtered_cloud_str, PointCloud2)
+
+def get_dominant_orientation(cloud_msg, reference_normal):
+    if not isinstance(reference_normal, list):
+        raise ValueError('reference_normal should be a list')
+
+    serial_cloud = to_cpp(cloud_msg)
+    dominant_orientation = _get_dominant_orientation(serial_cloud, reference_normal[0], reference_normal[1], reference_normal[2])
     return dominant_orientation
 
 

@@ -16,7 +16,7 @@ from mas_perception_libs.cfg import PlaneFittingConfig
 from .bounding_box import BoundingBox, BoundingBox2D
 from .image_detector import ImageDetectorBase, SingleImageDetectionHandler
 from .utils import PlaneSegmenter, cloud_msg_to_image_msg, transform_cloud_with_listener,\
-    get_obj_msg_from_detection, get_dominant_orientation
+    get_obj_msg_from_detection, filter_based_on_normals, get_dominant_orientation
 from .visualization import plane_msg_to_marker
 
 
@@ -169,9 +169,15 @@ class ObjectDetectionActionServer(object):
                                                       cloud_msg.header.frame_id)
 
             if index == 0:
-                dominant_orientation = get_dominant_orientation(detected_obj.pointcloud,
-                                                                [0., 0., 1.],
-                                                                np.deg2rad(40.))
+                filtered_cloud = filter_based_on_normals(detected_obj.pointcloud,
+                                                         [0., 0., 1.],
+                                                         np.deg2rad(40.))
+
+                filtered_cloud.header.frame_id = cloud_msg.header.frame_id
+                filtered_cloud.header.stamp = cloud_msg.header.stamp
+
+                dominant_orientation = get_dominant_orientation(filtered_cloud,
+                                                                [1., 0., 0.])
                 quat_orientation = tf.transformations.quaternion_from_euler(0., 0., dominant_orientation)
                 detected_obj.pose.pose.orientation.x = quat_orientation[0]
                 detected_obj.pose.pose.orientation.y = quat_orientation[1]
@@ -179,6 +185,7 @@ class ObjectDetectionActionServer(object):
                 detected_obj.pose.pose.orientation.w = quat_orientation[3]
 
                 self.pose_pub.publish(detected_obj.pose)
+                self.point_cloud_pub.publish(filtered_cloud)
                 self.point_cloud_orig_pub.publish(detected_obj.pointcloud)
 
             box_msg = detected_obj.bounding_box
