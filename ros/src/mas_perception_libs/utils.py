@@ -7,10 +7,11 @@ import rosbag
 from rospkg import RosPack
 import tf
 from cv_bridge import CvBridgeError
+from geometry_msgs.msg import Vector3, Quaternion
 from sensor_msgs.msg import PointCloud2, Image as ImageMsg
 from mas_perception_msgs.msg import PlaneList, Object
 from mas_perception_libs._cpp_wrapper import PlaneSegmenterWrapper, _cloud_msg_to_cv_image, _cloud_msg_to_image_msg,\
-    _crop_organized_cloud_msg, _crop_cloud_to_xyz, _transform_point_cloud
+    _crop_organized_cloud_msg, _crop_cloud_to_xyz, _transform_point_cloud, _get_dominant_orientation
 from .bounding_box import BoundingBox2D
 from .ros_message_serialization import to_cpp, from_cpp
 
@@ -195,6 +196,16 @@ def crop_cloud_to_xyz(cloud_msg, bounding_box):
     return _crop_cloud_to_xyz(serial_cloud, bounding_box)
 
 
+def get_dominant_orientation(cloud_msg, reference_normal, angle_filter_tolerance):
+    if not isinstance(reference_normal, list):
+        raise ValueError('reference_normal should be a list')
+
+    serial_cloud = to_cpp(cloud_msg)
+    dominant_orientation = _get_dominant_orientation(serial_cloud, reference_normal[0], reference_normal[1],
+                                                     reference_normal[2], angle_filter_tolerance)
+    return dominant_orientation
+
+
 def transform_cloud_with_listener(cloud_msg, target_frame, tf_listener):
     try:
         common_time = tf_listener.getLatestCommonTime(target_frame, cloud_msg.header.frame_id)
@@ -268,7 +279,7 @@ def get_obj_msg_from_detection(cloud_msg, bounding_box, category, confidence, fr
 
     # fill object geometry info
     detected_obj = Object()
-    detected_obj.bounding_box.center.x = mean_coord[0]
+    detected_obj.bounding_box.center.x = max_coord[0]
     detected_obj.bounding_box.center.y = mean_coord[1]
     detected_obj.bounding_box.center.z = mean_coord[2]
     detected_obj.bounding_box.dimensions.x = max_coord[0] - min_coord[0]

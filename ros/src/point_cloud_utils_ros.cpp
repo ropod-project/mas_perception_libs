@@ -4,10 +4,19 @@
  * Author: Minh Nguyen
  *
  */
+
+#define PCL_MAKE_ALIGNED_OPERATOR_NEW EIGEN_MAKE_ALIGNED_OPERATOR_NEW \
+  using _custom_allocator_type_trait = void;
+
 #include <string>
 #include <sensor_msgs/Image.h>
 #include <cv_bridge/cv_bridge.h>
 #include <pcl_conversions/pcl_conversions.h>
+#include <pcl/common/pca.h>
+#include <pcl/features/integral_image_normal.h>
+// #include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/filters/radius_outlier_removal.h>
+#include <mas_perception_libs/kmeans.h>
 #include <mas_perception_libs/aliases.h>
 #include <mas_perception_libs/bounding_box_2d.h>
 #include <mas_perception_libs/point_cloud_utils_ros.h>
@@ -195,6 +204,129 @@ PlaneSegmenterROS::findPlanes(const sensor_msgs::PointCloud2::ConstPtr &pCloudPt
     auto planeMsgPtr = planeModelToMsg(planeModel);
     planeListPtr->planes.push_back(*planeMsgPtr);
     return planeListPtr;
+}
+
+// sensor_msgs::PointCloud2::ConstPtr
+float
+getDominantOrientation(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
+                       const std::vector<double> &referenceNormal,
+                       double angleFilterTolerance)
+{
+    auto pclCloudPtr = boost::make_shared<PointCloud>();
+    pcl::fromROSMsg(*pCloudPtr, *pclCloudPtr);
+
+    std::cout << "Removing NANs" << std::endl;
+    auto cloudWithoutOutliers = boost::make_shared<PointCloud>();
+    PointCloud::Ptr cloudWithoutNans = boost::make_shared<PointCloud>();
+    std::vector<int> indices;
+    pclCloudPtr->is_dense = false;
+    pcl::removeNaNFromPointCloud(*pclCloudPtr, *cloudWithoutNans, indices);
+
+    std::cout << "Estimating normals" << std::endl;
+    pcl::NormalEstimation<PointT, pcl::Normal> ne;
+    pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
+    pcl::search::KdTree<PointT>::Ptr tree (new pcl::search::KdTree<PointT>());
+    ne.setSearchMethod (tree);
+    ne.setRadiusSearch(0.03f);
+    ne.setInputCloud(cloudWithoutNans);
+    ne.compute(*normals);
+
+    std::cout << "Filtering cloud based on angle to reference normal: ("
+              << referenceNormal[0] << " " << referenceNormal[1] << " " << referenceNormal[2] << ")"
+              << std::endl;
+    Eigen::Vector4f referenceNormalEigen(referenceNormal[0], referenceNormal[1], referenceNormal[2], 0);
+    double referenceNormalNorm = referenceNormalEigen.norm();
+    auto filteredCloudPtr = boost::make_shared<PointCloud>();
+
+    // extract only those points for which the normal is aligned with the reference normal
+    unsigned int removed_points_count = 0;
+    for (unsigned int i=0; i < normals->points.size(); i++)
+    {
+        Eigen::Vector4f normalEigen(normals->points[i].normal_x,
+                                    normals->points[i].normal_y,
+                                    normals->points[i].normal_z, 0);
+        double angle = std::abs(pcl::getAngle3D(referenceNormalEigen, normalEigen));
+        angle = std::min(angle, M_PI - angle);
+        if (std::abs(angle) > angleFilterTolerance)
+        {
+            filteredCloudPtr->push_back(cloudWithoutNans->points[i]);
+        }
+    }
+
+    std::cout << "Removing outliers" << std::endl;
+    pcl::RadiusOutlierRemoval<PointT> sor;
+    sor.setInputCloud(filteredCloudPtr);
+    sor.setRadiusSearch (0.03);
+    sor.setMinNeighborsInRadius (100);
+    sor.filter(*cloudWithoutOutliers);
+
+    // kept for debugging purposes
+    // sensor_msgs::PointCloud2::Ptr filteredCloudMsgPtr (new sensor_msgs::PointCloud2);
+    // filteredCloudMsgPtr->header = pCloudPtr->header;
+    // filteredCloudMsgPtr->fields = pCloudPtr->fields;
+    // filteredCloudMsgPtr->is_bigendian = pCloudPtr->is_bigendian;
+    // filteredCloudMsgPtr->is_dense = pCloudPtr->is_dense;
+    // filteredCloudMsgPtr->height = 1;
+    // filteredCloudMsgPtr->width = cloudWithoutOutliers->points.size();
+    // pcl::toROSMsg(*cloudWithoutOutliers, *filteredCloudMsgPtr);
+    // return filteredCloudMsgPtr;
+
+    // extract only those points for which the normal is not aligned with the reference normal
+    Eigen::Vector4f xAxisEigen(1, 0, 0, 0);
+    std::vector<std::vector<float>> angles;
+    for (unsigned int i=0; i < normals->points.size(); i++)
+    {
+        Eigen::Vector4f normalEigen(normals->points[i].normal_x,
+                                    normals->points[i].normal_y,
+                                    normals->points[i].normal_z, 0);
+        double angle = std::abs(pcl::getAngle3D(xAxisEigen, normalEigen));
+        angle = std::min(angle, M_PI - angle);
+
+        double angleWithReference = std::abs(pcl::getAngle3D(referenceNormalEigen, normalEigen));
+        angleWithReference = std::min(angleWithReference, M_PI - angleWithReference);
+
+        if (!std::isnan(angle) && std::abs(angleWithReference) > angleFilterTolerance)
+        {
+            std::vector<float> angle_vec;
+            angle_vec.push_back(static_cast<float>(angle));
+            angles.push_back(angle_vec);
+        }
+    }
+
+    std::cout << "Clustering orientations with respect to x-axis" << std::endl;
+    pcl::Kmeans clustering(angles.size(), 1);
+    clustering.setInputData(angles);
+    clustering.setClusterSize(2);
+    clustering.kMeans();
+
+    auto centroids = clustering.get_centroids();
+    std::cout << "Orientation centroids:" << std::endl;
+    for (auto centroid : centroids)
+    {
+        for (auto c : centroid)
+        {
+            std::cout << c << " " << std::endl;
+        }
+    }
+
+    unsigned int cluster_point_counts[2];
+    for (auto cluster : clustering.points_to_clusters_)
+    {
+        cluster_point_counts[cluster] += 1;
+    }
+
+    unsigned int max_cluster = 0;
+    unsigned int max_point_count = cluster_point_counts[0];
+    for (unsigned int i=0; i < 2; i++)
+    {
+        if (max_point_count < cluster_point_counts[i])
+        {
+            max_point_count = cluster_point_counts[i];
+            max_cluster = i;
+        }
+    }
+
+    return centroids[max_cluster][0];
 }
 
 }   // namespace mas_perception_libs

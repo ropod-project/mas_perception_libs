@@ -59,6 +59,7 @@ add_library(${PROJECT_NAME}
   common/src/bounding_box_2d.cpp
   common/src/point_cloud_utils.cpp
   common/src/sac_plane_segmenter.cpp
+  common/src/kmeans.cpp
   ros/src/image_bounding_box.cpp
   ros/src/point_cloud_utils_ros.cpp
 )
@@ -69,6 +70,7 @@ add_dependencies(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
+  ${PCL_LIBRARIES}
 )
 
 ###################################
@@ -91,6 +93,7 @@ target_link_libraries(_cpp_wrapper
   ${PYTHON_LIBRARIES}
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
+  ${PCL_LIBRARIES}
 )
 
 ###################################
