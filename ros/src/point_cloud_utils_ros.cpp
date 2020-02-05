@@ -258,6 +258,11 @@ filterBasedOnNormals(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
     pclCloudPtr->is_dense = false;
     pcl::removeNaNFromPointCloud(*filteredCloudPtr, *cloudWithoutNans, indices);
 
+    std::cout << "Downsampling cloud with leaf size ("
+              << VOXEL_GRID_FILTER_SIZE_X << "cm, "
+              << VOXEL_GRID_FILTER_SIZE_Y << "cm, "
+              << VOXEL_GRID_FILTER_SIZE_Z << "cm"
+              << ")" << std::endl;
     PointCloud::Ptr downsampledCloud = boost::make_shared<PointCloud>();
     pcl::VoxelGrid<PointT> voxelGridFilter;
     voxelGridFilter.setInputCloud(filteredCloudPtr);
