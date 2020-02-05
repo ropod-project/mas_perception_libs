@@ -9,6 +9,7 @@
   using _custom_allocator_type_trait = void;
 
 #include <string>
+#include <cmath>
 #include <sensor_msgs/Image.h>
 #include <cv_bridge/cv_bridge.h>
 #include <pcl_conversions/pcl_conversions.h>
@@ -16,10 +17,12 @@
 #include <pcl/features/integral_image_normal.h>
 // #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/radius_outlier_removal.h>
+#include <mas_perception_libs/filter_parameters.h>
 #include <mas_perception_libs/kmeans.h>
 #include <mas_perception_libs/aliases.h>
 #include <mas_perception_libs/bounding_box_2d.h>
 #include <mas_perception_libs/point_cloud_utils_ros.h>
+
 
 namespace mas_perception_libs
 {
@@ -207,7 +210,6 @@ PlaneSegmenterROS::findPlanes(const sensor_msgs::PointCloud2::ConstPtr &pCloudPt
 }
 
 sensor_msgs::PointCloud2::ConstPtr
-// float
 filterBasedOnNormals(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
                      const std::vector<double> &referenceNormal,
                      double angleFilterTolerance)
@@ -215,20 +217,16 @@ filterBasedOnNormals(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
     auto pclCloudPtr = boost::make_shared<PointCloud>();
     pcl::fromROSMsg(*pCloudPtr, *pclCloudPtr);
 
-    std::cout << "Removing NANs" << std::endl;
-    auto cloudWithoutOutliers = boost::make_shared<PointCloud>();
-    PointCloud::Ptr cloudWithoutNans = boost::make_shared<PointCloud>();
-    std::vector<int> indices;
-    pclCloudPtr->is_dense = false;
-    pcl::removeNaNFromPointCloud(*pclCloudPtr, *cloudWithoutNans, indices);
-
-    std::cout << "Estimating normals" << std::endl;
-    pcl::NormalEstimation<PointT, pcl::Normal> ne;
+    std::cout << "Estimating normals\n    * depth change factor: "
+              << INTEGRAL_NORMAL_ESTIMATION_DEPTH_CHANGE_FACTOR << "cm"
+              << "\n    smoothing size: " << INTEGRAL_NORMAL_ESTIMATION_SMOOTHING_FACTOR
+              << std::endl;
     pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
-    pcl::search::KdTree<PointT>::Ptr tree (new pcl::search::KdTree<PointT>());
-    ne.setSearchMethod (tree);
-    ne.setRadiusSearch(0.03f);
-    ne.setInputCloud(cloudWithoutNans);
+    pcl::IntegralImageNormalEstimation<PointT, pcl::Normal> ne;
+    ne.setNormalEstimationMethod(ne.AVERAGE_3D_GRADIENT);
+    ne.setMaxDepthChangeFactor(INTEGRAL_NORMAL_ESTIMATION_DEPTH_CHANGE_FACTOR);
+    ne.setNormalSmoothingSize(INTEGRAL_NORMAL_ESTIMATION_SMOOTHING_FACTOR);
+    ne.setInputCloud(pclCloudPtr);
     ne.compute(*normals);
 
     std::cout << "Filtering cloud based on angle to reference normal: ("
@@ -249,15 +247,24 @@ filterBasedOnNormals(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
         angle = std::min(angle, M_PI - angle);
         if (std::abs(angle) > angleFilterTolerance)
         {
-            filteredCloudPtr->push_back(cloudWithoutNans->points[i]);
+            filteredCloudPtr->push_back(pclCloudPtr->points[i]);
         }
     }
 
-    std::cout << "Removing outliers" << std::endl;
+    std::cout << "Removing NANs" << std::endl;
+    PointCloud::Ptr cloudWithoutNans = boost::make_shared<PointCloud>();
+    std::vector<int> indices;
+    pclCloudPtr->is_dense = false;
+    pcl::removeNaNFromPointCloud(*filteredCloudPtr, *cloudWithoutNans, indices);
+
+    std::cout << "Removing outliers:\n    * radius: "
+              << OUTLIER_REMOVAL_RADIUS << "\n    * number of neighbours: "
+              << OUTLIER_REMOVAL_NUMBER_OF_NEIGHBOURS << std::endl;
+    auto cloudWithoutOutliers = boost::make_shared<PointCloud>();
     pcl::RadiusOutlierRemoval<PointT> sor;
     sor.setInputCloud(filteredCloudPtr);
-    sor.setRadiusSearch (0.03);
-    sor.setMinNeighborsInRadius (100);
+    sor.setRadiusSearch(OUTLIER_REMOVAL_RADIUS);
+    sor.setMinNeighborsInRadius(OUTLIER_REMOVAL_NUMBER_OF_NEIGHBOURS);
     sor.filter(*cloudWithoutOutliers);
 
     sensor_msgs::PointCloud2::Ptr filteredCloudMsgPtr (new sensor_msgs::PointCloud2);
@@ -277,12 +284,13 @@ float getDominantOrientation(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr
     auto pclCloudPtr = boost::make_shared<PointCloud>();
     pcl::fromROSMsg(*pCloudPtr, *pclCloudPtr);
 
-    std::cout << "Estimating normals for calculating orientation" << std::endl;
+    std::cout << "Estimating normals for calculating orientation\n    * radius "
+              << NORMAL_ESTIMATION_RADIUS << "cm" << std::endl;
     pcl::NormalEstimation<PointT, pcl::Normal> ne;
     pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
     pcl::search::KdTree<PointT>::Ptr tree (new pcl::search::KdTree<PointT>());
     ne.setSearchMethod (tree);
-    ne.setRadiusSearch(0.03f);
+    ne.setRadiusSearch(NORMAL_ESTIMATION_RADIUS);
     ne.setInputCloud(pclCloudPtr);
     ne.compute(*normals);
 
@@ -296,8 +304,8 @@ float getDominantOrientation(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr
         Eigen::Vector4f normalEigen(normals->points[i].normal_x,
                                     normals->points[i].normal_y,
                                     normals->points[i].normal_z, 0);
-        double angle = std::abs(pcl::getAngle3D(referenceNormalEigen, normalEigen));
-        angle = std::min(angle, M_PI - angle);
+        double angle = std::atan2(normals->points[i].normal_y, normals->points[i].normal_x);
+        if (std::isnan(angle)) continue;
         std::vector<float> angle_vec;
         angle_vec.push_back(static_cast<float>(angle));
         angles.push_back(angle_vec);
@@ -309,7 +317,12 @@ float getDominantOrientation(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr
     clustering.kMeans();
     auto centroids = clustering.get_centroids();
 
-    unsigned int cluster_point_counts[2];
+    std::vector<int> cluster_point_counts;
+    for (unsigned int i=0; i<2; i++)
+    {
+        cluster_point_counts.push_back(0);
+    }
+
     for (auto cluster : clustering.points_to_clusters_)
     {
         cluster_point_counts[cluster] += 1;
