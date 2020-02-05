@@ -17,6 +17,7 @@
 #include <pcl/features/integral_image_normal.h>
 // #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/radius_outlier_removal.h>
+#include <pcl/filters/voxel_grid.h>
 #include <mas_perception_libs/filter_parameters.h>
 #include <mas_perception_libs/kmeans.h>
 #include <mas_perception_libs/aliases.h>
@@ -257,12 +258,20 @@ filterBasedOnNormals(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
     pclCloudPtr->is_dense = false;
     pcl::removeNaNFromPointCloud(*filteredCloudPtr, *cloudWithoutNans, indices);
 
+    PointCloud::Ptr downsampledCloud = boost::make_shared<PointCloud>();
+    pcl::VoxelGrid<PointT> voxelGridFilter;
+    voxelGridFilter.setInputCloud(filteredCloudPtr);
+    voxelGridFilter.setLeafSize(VOXEL_GRID_FILTER_SIZE_X,
+                                VOXEL_GRID_FILTER_SIZE_Y,
+                                VOXEL_GRID_FILTER_SIZE_Z);
+    voxelGridFilter.filter(*downsampledCloud);
+
     std::cout << "Removing outliers:\n    * radius: "
               << OUTLIER_REMOVAL_RADIUS << "\n    * number of neighbours: "
               << OUTLIER_REMOVAL_NUMBER_OF_NEIGHBOURS << std::endl;
     auto cloudWithoutOutliers = boost::make_shared<PointCloud>();
     pcl::RadiusOutlierRemoval<PointT> sor;
-    sor.setInputCloud(filteredCloudPtr);
+    sor.setInputCloud(downsampledCloud);
     sor.setRadiusSearch(OUTLIER_REMOVAL_RADIUS);
     sor.setMinNeighborsInRadius(OUTLIER_REMOVAL_NUMBER_OF_NEIGHBOURS);
     sor.filter(*cloudWithoutOutliers);
