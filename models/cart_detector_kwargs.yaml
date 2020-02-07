@@ -1,0 +1,4 @@
+detector_module: dataset_interface.object_detection.utils
+detector_instantiator: get_model
+detection_threshold: 0.8
+model_path: /home/lucy/.models/faster_rcnn_carts.pt
