@@ -9,6 +9,7 @@ from cv_bridge import CvBridge
 from sensor_msgs.msg import PointCloud2
 from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker
+
 from mas_perception_msgs.msg import DetectSceneAction, DetectSceneResult,\
                                     DetectObjectsAction, DetectObjectsResult,\
                                     PlaneList, Object
@@ -16,7 +17,8 @@ from mas_perception_libs.cfg import PlaneFittingConfig
 from .bounding_box import BoundingBox, BoundingBox2D
 from .image_detector import ImageDetectorBase, SingleImageDetectionHandler
 from .utils import PlaneSegmenter, cloud_msg_to_image_msg, transform_cloud_with_listener,\
-    get_obj_msg_from_detection, filter_based_on_normals, get_dominant_orientation
+    get_obj_msg_from_detection, filter_based_on_normals, get_dominant_orientation,\
+    get_homogeneous_transform, get_rotation_z, transform_point_cloud_with_matrix
 from .visualization import plane_msg_to_marker
 
 
@@ -79,6 +81,7 @@ class ObjectDetectionActionServer(object):
         self.pose_pub = rospy.Publisher('/object_detection/pose', PoseStamped, queue_size=1)
         self.point_cloud_pub = rospy.Publisher('/object_detection/pointcloud', PointCloud2, queue_size=1)
         self.point_cloud_orig_pub = rospy.Publisher('/object_detection/original_pointcloud', PointCloud2, queue_size=1)
+        self.transform_broadcater = tf.TransformBroadcaster()
 
         self._initialize(**kwargs)
         self._action_server.start()
@@ -136,7 +139,8 @@ class ObjectDetectionActionServer(object):
             self._action_server.set_aborted(text=e.message)
             return
 
-        rospy.loginfo('transforming cloud to frame: ' + self._target_frame)
+        rospy.loginfo('transforming cloud from frame {0} to frame {1}'.format(cloud_msg.header.frame_id,
+                                                                              self._target_frame))
         try:
             # FIXME: Add timeout and a debugging message that it's waiting for transform
             transformed_cloud_msg = transform_cloud_with_listener(cloud_msg, self._target_frame, self._tf_listener)
@@ -183,6 +187,17 @@ class ObjectDetectionActionServer(object):
                 detected_obj.pose.pose.orientation.y = quat_orientation[1]
                 detected_obj.pose.pose.orientation.z = quat_orientation[2]
                 detected_obj.pose.pose.orientation.w = quat_orientation[3]
+
+                T = get_homogeneous_transform(get_rotation_z(dominant_orientation),
+                                              np.array([detected_obj.bounding_box.center.x,
+                                                        detected_obj.bounding_box.center.y,
+                                                        detected_obj.bounding_box.center.z]))
+                T_inv = np.linalg.inv(T)
+                points_obj_frame = transform_point_cloud_with_matrix(detected_obj.pointcloud, T_inv)
+                max_x_idx = np.argmax(points_obj_frame, axis=0)[0]
+                max_x_point = points_obj_frame[max_x_idx][np.newaxis].T
+                max_x_point_robot_frame = T.dot(max_x_point).squeeze()
+                detected_obj.pose.pose.position.x = max_x_point_robot_frame[0]
 
                 self.pose_pub.publish(detected_obj.pose)
                 self.point_cloud_pub.publish(filtered_cloud)
