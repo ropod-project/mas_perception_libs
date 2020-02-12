@@ -18,6 +18,7 @@
 // #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/radius_outlier_removal.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/segmentation/extract_clusters.h>
 #include <mas_perception_libs/filter_parameters.h>
 #include <mas_perception_libs/kmeans.h>
 #include <mas_perception_libs/aliases.h>
@@ -281,6 +282,41 @@ filterBasedOnNormals(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
     sor.setMinNeighborsInRadius(OUTLIER_REMOVAL_NUMBER_OF_NEIGHBOURS);
     sor.filter(*cloudWithoutOutliers);
 
+    std::cout << "Creating KD tree for Euclidean clustering" << std::endl;
+    pcl::search::KdTree<PointT>::Ptr tree(new pcl::search::KdTree<PointT>);
+    tree->setInputCloud(cloudWithoutOutliers);
+
+    std::cout << "Performing Euclidean clustering" << std::endl;
+    std::vector<pcl::PointIndices> clusterIndices;
+    pcl::EuclideanClusterExtraction<PointT> ec;
+    ec.setClusterTolerance(0.1);
+    ec.setMinClusterSize(10);
+    ec.setMaxClusterSize(100000);
+    ec.setSearchMethod(tree);
+    ec.setInputCloud(cloudWithoutOutliers);
+    ec.extract(clusterIndices);
+
+    unsigned int maxPointCluster = 0;
+    unsigned int maxPointsPerCluster = 0;
+    for(unsigned int i=0; i<clusterIndices.size(); i++)
+    {
+        if (clusterIndices[i].indices.size() > maxPointsPerCluster)
+        {
+            maxPointsPerCluster = clusterIndices[i].indices.size();
+            maxPointCluster = i;
+        }
+    }
+
+    pcl::PointCloud<PointT>::Ptr dominantClusterCloud(new pcl::PointCloud<PointT>);
+    for (unsigned int i=0; i<clusterIndices[maxPointCluster].indices.size(); i++)
+    {
+        unsigned int pointIdx = clusterIndices[maxPointCluster].indices[i];
+        dominantClusterCloud->points.push_back(cloudWithoutOutliers->points[pointIdx]);
+    }
+    dominantClusterCloud->width = dominantClusterCloud->points.size();
+    dominantClusterCloud->height = 1;
+    dominantClusterCloud->is_dense = true;
+
     sensor_msgs::PointCloud2::Ptr filteredCloudMsgPtr (new sensor_msgs::PointCloud2);
     filteredCloudMsgPtr->header = pCloudPtr->header;
     filteredCloudMsgPtr->fields = pCloudPtr->fields;
@@ -288,7 +324,7 @@ filterBasedOnNormals(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
     filteredCloudMsgPtr->is_dense = pCloudPtr->is_dense;
     filteredCloudMsgPtr->height = 1;
     filteredCloudMsgPtr->width = cloudWithoutOutliers->points.size();
-    pcl::toROSMsg(*cloudWithoutOutliers, *filteredCloudMsgPtr);
+    pcl::toROSMsg(*dominantClusterCloud, *filteredCloudMsgPtr);
     return filteredCloudMsgPtr;
 }
 
