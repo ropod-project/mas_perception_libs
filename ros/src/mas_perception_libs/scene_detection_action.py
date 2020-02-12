@@ -18,7 +18,8 @@ from .bounding_box import BoundingBox, BoundingBox2D
 from .image_detector import ImageDetectorBase, SingleImageDetectionHandler
 from .utils import PlaneSegmenter, cloud_msg_to_image_msg, transform_cloud_with_listener,\
     get_obj_msg_from_detection, filter_based_on_normals, get_dominant_orientation,\
-    get_homogeneous_transform, get_rotation_z, transform_point_cloud_with_matrix
+    get_homogeneous_transform, get_rotation_z, transform_point_cloud_with_matrix,\
+    passthrouh_points_along_x
 from .visualization import plane_msg_to_marker
 
 
@@ -71,7 +72,7 @@ class ObjectDetectionActionServer(object):
     _target_frame = None                # type: str
     _cv_bridge = None                   # type: CvBridge
 
-    def __init__(self, action_name, timeout_s=10., **kwargs):
+    def __init__(self, action_name, timeout_s=50., **kwargs):
         rospy.loginfo('broadcasting action server: ' + action_name)
         self._action_server = SimpleActionServer(action_name, DetectObjectsAction,
                                                  execute_cb=self._execute_cb,
@@ -193,11 +194,17 @@ class ObjectDetectionActionServer(object):
                                                         detected_obj.bounding_box.center.y,
                                                         detected_obj.bounding_box.center.z]))
                 T_inv = np.linalg.inv(T)
-                points_obj_frame = transform_point_cloud_with_matrix(detected_obj.pointcloud, T_inv)
+                points_obj_frame = transform_point_cloud_with_matrix(filtered_cloud, T_inv)
                 max_x_idx = np.argmax(points_obj_frame, axis=0)[0]
                 max_x_point = points_obj_frame[max_x_idx][np.newaxis].T
                 max_x_point_robot_frame = T.dot(max_x_point).squeeze()
-                detected_obj.pose.pose.position.x = max_x_point_robot_frame[0]
+
+                close_x_points = passthrouh_points_along_x(points_obj_frame, max_x_point[0])
+                point = np.mean(close_x_points, axis=0)[np.newaxis].T
+                point_robot_frame = T.dot(point).squeeze()
+
+                detected_obj.pose.pose.position.x = point_robot_frame[0]
+                detected_obj.pose.pose.position.y = point_robot_frame[1]
 
                 self.pose_pub.publish(detected_obj.pose)
                 self.point_cloud_pub.publish(filtered_cloud)

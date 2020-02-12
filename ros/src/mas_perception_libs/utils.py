@@ -291,6 +291,18 @@ def transform_point_cloud_with_matrix(cloud_msg, T):
                                                                   field_names=('x','y','z','rgb'))])
     return transformed_points
 
+def passthrouh_points_along_x(points, x, distance_threshold=0.15):
+    '''Returns a filtered set of points whose x coordinate is within
+    distance_threshold units from the given x
+
+    Keyword arguments:
+    points: np.array -- a 2D array of homogeneous points (each row is a separate point)
+    x: float -- x coordinate around which to filter points
+    distance_threshold: float -- point filtering threshold (default 0.15)
+
+    '''
+    return np.array([p for p in points if abs(p[0] - x) < distance_threshold])
+
 def transform_point_cloud(cloud_msg, tf_matrix, target_frame):
     """
     transform a sensor_msgs/PointCloud2 message using a transformation matrix
