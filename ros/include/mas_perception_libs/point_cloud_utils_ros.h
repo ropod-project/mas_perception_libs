@@ -10,6 +10,7 @@
 #include <string>
 #include <opencv/cv.h>
 #include <std_msgs/Header.h>
+#include <geometry_msgs/Vector3.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <visualization_msgs/Marker.h>
 #include <mas_perception_msgs/PlaneList.h>
@@ -63,6 +64,15 @@ planeMsgToMarkers(const mas_perception_msgs::Plane &pPlaneMsg, const std::string
 mas_perception_msgs::Plane::Ptr
 planeModelToMsg(const PlaneModel &pModel);
 
+sensor_msgs::PointCloud2::ConstPtr
+filterBasedOnNormals(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
+                     const std::vector<double> &referenceNormal,
+                     double angleFilterTolerance);
+
+float getDominantOrientation(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr,
+                             const std::vector<double> &referenceNormal);
+
+
 /*!
  * @brief combines plane segmentation and cloud filtering and allow configuration using dynamic reconfigure
  */
@@ -95,6 +105,7 @@ public:
      */
     virtual mas_perception_msgs::PlaneList::Ptr
     findPlanes(const sensor_msgs::PointCloud2::ConstPtr &pCloudPtr, sensor_msgs::PointCloud2::Ptr &pFilteredCloudMsg);
+
 
 protected:
     CloudFilter mCloudFilter;

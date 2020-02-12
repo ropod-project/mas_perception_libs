@@ -7,10 +7,13 @@ import rosbag
 from rospkg import RosPack
 import tf
 from cv_bridge import CvBridgeError
+from geometry_msgs.msg import Vector3, Quaternion
 from sensor_msgs.msg import PointCloud2, Image as ImageMsg
+import sensor_msgs.point_cloud2 as pc2_utils
+
 from mas_perception_msgs.msg import PlaneList, Object
 from mas_perception_libs._cpp_wrapper import PlaneSegmenterWrapper, _cloud_msg_to_cv_image, _cloud_msg_to_image_msg,\
-    _crop_organized_cloud_msg, _crop_cloud_to_xyz, _transform_point_cloud
+    _crop_organized_cloud_msg, _crop_cloud_to_xyz, _transform_point_cloud, _filter_based_on_normals, _get_dominant_orientation
 from .bounding_box import BoundingBox2D
 from .ros_message_serialization import to_cpp, from_cpp
 
@@ -195,6 +198,24 @@ def crop_cloud_to_xyz(cloud_msg, bounding_box):
     return _crop_cloud_to_xyz(serial_cloud, bounding_box)
 
 
+def filter_based_on_normals(cloud_msg, reference_normal, angle_filter_tolerance):
+    if not isinstance(reference_normal, list):
+        raise ValueError('reference_normal should be a list')
+
+    serial_cloud = to_cpp(cloud_msg)
+    filtered_cloud_str = _filter_based_on_normals(serial_cloud, reference_normal[0], reference_normal[1],
+                                                  reference_normal[2], angle_filter_tolerance)
+    return from_cpp(filtered_cloud_str, PointCloud2)
+
+def get_dominant_orientation(cloud_msg, reference_normal):
+    if not isinstance(reference_normal, list):
+        raise ValueError('reference_normal should be a list')
+
+    serial_cloud = to_cpp(cloud_msg)
+    dominant_orientation = _get_dominant_orientation(serial_cloud, reference_normal[0], reference_normal[1], reference_normal[2])
+    return dominant_orientation
+
+
 def transform_cloud_with_listener(cloud_msg, target_frame, tf_listener):
     try:
         common_time = tf_listener.getLatestCommonTime(target_frame, cloud_msg.header.frame_id)
@@ -228,6 +249,59 @@ def transform_point_cloud_trans_quat(cloud_msg, translation, rotation, target_fr
     transform_matrix = compose(translation, rotation_mat, zoom)
     return transform_point_cloud(cloud_msg, transform_matrix, target_frame)
 
+def get_homogeneous_transform(R, t):
+    '''Returns a homogeneous transformation matrix from the given
+    rotation matrix and translation vector.
+
+    Keyword arguments:
+    R: np.array -- rotation matrix
+    t: np.array -- translation vector of shape (3,)
+
+    '''
+    t = t[np.newaxis].T
+    T = np.hstack((R, t))
+    T = np.vstack((T, np.array([0., 0., 0., 1])))
+    return T
+
+def get_rotation_z(theta):
+    '''Returns a numpy array representing a rotation matrix
+    around the z-axis from the given angle.
+
+    Keyword arguments:
+    theta: float -- rotation angle
+
+    '''
+    R = np.array([[np.cos(theta), -np.sin(theta), 0.],
+                 [np.sin(theta), np.cos(theta),  0.],
+                 [0.,            0.,             1.]])
+    return R
+
+def transform_point_cloud_with_matrix(cloud_msg, T):
+    '''Transforms the points in a coloured point cloud using
+    the given transformation matrix. Returns a numpy array of shape
+    (n, 4), where n is the number of points in the cloud.
+
+    Keyword arguments:
+    cloud_msg: sensor_msgs.PointCloud2
+    T: np.array -- homogeneous transformation matrix
+
+    '''
+    transformed_points = np.array([T.dot(np.array([p[0], p[1], p[2], 1.])[np.newaxis].T).squeeze()
+                                   for p in pc2_utils.read_points(cloud_msg, skip_nans=True,
+                                                                  field_names=('x','y','z','rgb'))])
+    return transformed_points
+
+def passthrouh_points_along_x(points, x, distance_threshold=0.15):
+    '''Returns a filtered set of points whose x coordinate is within
+    distance_threshold units from the given x
+
+    Keyword arguments:
+    points: np.array -- a 2D array of homogeneous points (each row is a separate point)
+    x: float -- x coordinate around which to filter points
+    distance_threshold: float -- point filtering threshold (default 0.15)
+
+    '''
+    return np.array([p for p in points if abs(p[0] - x) < distance_threshold])
 
 def transform_point_cloud(cloud_msg, tf_matrix, target_frame):
     """

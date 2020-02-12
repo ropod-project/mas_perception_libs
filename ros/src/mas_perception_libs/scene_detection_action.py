@@ -7,7 +7,9 @@ from dynamic_reconfigure.server import Server as ParamServer
 from actionlib import SimpleActionServer
 from cv_bridge import CvBridge
 from sensor_msgs.msg import PointCloud2
+from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker
+
 from mas_perception_msgs.msg import DetectSceneAction, DetectSceneResult,\
                                     DetectObjectsAction, DetectObjectsResult,\
                                     PlaneList, Object
@@ -15,7 +17,9 @@ from mas_perception_libs.cfg import PlaneFittingConfig
 from .bounding_box import BoundingBox, BoundingBox2D
 from .image_detector import ImageDetectorBase, SingleImageDetectionHandler
 from .utils import PlaneSegmenter, cloud_msg_to_image_msg, transform_cloud_with_listener,\
-    get_obj_msg_from_detection
+    get_obj_msg_from_detection, filter_based_on_normals, get_dominant_orientation,\
+    get_homogeneous_transform, get_rotation_z, transform_point_cloud_with_matrix,\
+    passthrouh_points_along_x
 from .visualization import plane_msg_to_marker
 
 
@@ -68,12 +72,18 @@ class ObjectDetectionActionServer(object):
     _target_frame = None                # type: str
     _cv_bridge = None                   # type: CvBridge
 
-    def __init__(self, action_name, timeout_s=10., **kwargs):
+    def __init__(self, action_name, timeout_s=50., **kwargs):
         rospy.loginfo('broadcasting action server: ' + action_name)
         self._action_server = SimpleActionServer(action_name, DetectObjectsAction,
                                                  execute_cb=self._execute_cb,
                                                  auto_start=False)
         self._timeout_s = timeout_s
+
+        self.pose_pub = rospy.Publisher('/object_detection/pose', PoseStamped, queue_size=1)
+        self.point_cloud_pub = rospy.Publisher('/object_detection/pointcloud', PointCloud2, queue_size=1)
+        self.point_cloud_orig_pub = rospy.Publisher('/object_detection/original_pointcloud', PointCloud2, queue_size=1)
+        self.transform_broadcater = tf.TransformBroadcaster()
+
         self._initialize(**kwargs)
         self._action_server.start()
 
@@ -130,23 +140,25 @@ class ObjectDetectionActionServer(object):
             self._action_server.set_aborted(text=e.message)
             return
 
-        rospy.loginfo('transforming cloud to frame: ' + self._target_frame)
+        rospy.loginfo('transforming cloud from frame {0} to frame {1}'.format(cloud_msg.header.frame_id,
+                                                                              self._target_frame))
         try:
+            # FIXME: Add timeout and a debugging message that it's waiting for transform
             transformed_cloud_msg = transform_cloud_with_listener(cloud_msg, self._target_frame, self._tf_listener)
         except RuntimeError as e:
             self._action_server.set_aborted(text=e.message)
             return
 
+        # FIXME: delete this publisher; filtered_cloud is undefined here
         if self._filtered_cloud_pub.get_num_connections() > 0:
             self._filtered_cloud_pub.publish(filtered_cloud)
 
         rospy.loginfo('creating action result and setting success')
-        result = ObjectDetectionActionServer._get_action_result(transformed_cloud_msg, bounding_boxes,
-                                                                classes, confidences)
+        result = self._get_action_result(transformed_cloud_msg, bounding_boxes,
+                                         classes, confidences)
         self._action_server.set_succeeded(result)
 
-    @staticmethod
-    def _get_action_result(cloud_msg, bounding_boxes, classes, confidences):
+    def _get_action_result(self, cloud_msg, bounding_boxes, classes, confidences):
         """
         :type cloud_msg: PointCloud2
         :type bounding_boxes: list
@@ -160,6 +172,43 @@ class ObjectDetectionActionServer(object):
                                                       classes[index],
                                                       confidences[index],
                                                       cloud_msg.header.frame_id)
+
+            if index == 0:
+                filtered_cloud = filter_based_on_normals(detected_obj.pointcloud,
+                                                         [0., 0., 1.],
+                                                         np.deg2rad(40.))
+
+                filtered_cloud.header.frame_id = cloud_msg.header.frame_id
+                filtered_cloud.header.stamp = cloud_msg.header.stamp
+
+                dominant_orientation = get_dominant_orientation(filtered_cloud,
+                                                                [1., 0., 0.])
+                quat_orientation = tf.transformations.quaternion_from_euler(0., 0., dominant_orientation)
+                detected_obj.pose.pose.orientation.x = quat_orientation[0]
+                detected_obj.pose.pose.orientation.y = quat_orientation[1]
+                detected_obj.pose.pose.orientation.z = quat_orientation[2]
+                detected_obj.pose.pose.orientation.w = quat_orientation[3]
+
+                T = get_homogeneous_transform(get_rotation_z(dominant_orientation),
+                                              np.array([detected_obj.bounding_box.center.x,
+                                                        detected_obj.bounding_box.center.y,
+                                                        detected_obj.bounding_box.center.z]))
+                T_inv = np.linalg.inv(T)
+                points_obj_frame = transform_point_cloud_with_matrix(filtered_cloud, T_inv)
+                max_x_idx = np.argmax(points_obj_frame, axis=0)[0]
+                max_x_point = points_obj_frame[max_x_idx][np.newaxis].T
+                max_x_point_robot_frame = T.dot(max_x_point).squeeze()
+
+                close_x_points = passthrouh_points_along_x(points_obj_frame, max_x_point[0])
+                point = np.mean(close_x_points, axis=0)[np.newaxis].T
+                point_robot_frame = T.dot(point).squeeze()
+
+                detected_obj.pose.pose.position.x = point_robot_frame[0]
+                detected_obj.pose.pose.position.y = point_robot_frame[1]
+
+                self.pose_pub.publish(detected_obj.pose)
+                self.point_cloud_pub.publish(filtered_cloud)
+                self.point_cloud_orig_pub.publish(detected_obj.pointcloud)
 
             box_msg = detected_obj.bounding_box
             rospy.loginfo("Adding object '%s', position (%.3f, %.3f, %.3f), dimensions (%.3f, %.3f, %.3f)"
